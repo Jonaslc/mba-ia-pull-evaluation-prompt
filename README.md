@@ -334,3 +334,112 @@ python src/evaluate.py
 - **Não altere os datasets de avaliação** - apenas os prompts em `prompts/bug_to_user_story_v2.yml`
 - **Itere, itere, itere** - é normal precisar de 3-5 iterações para atingir 0.8 em todas as métricas
 - **Documente seu processo** - a jornada de otimização é tão importante quanto o resultado final
+
+---
+---
+
+# 📦 Documentação da Entrega (Solução)
+
+> Esta seção documenta a resolução do desafio: técnicas aplicadas, resultados e como executar.
+
+## A) Técnicas Aplicadas (Fase 2)
+
+O prompt otimizado está em [`prompts/bug_to_user_story_v2.yml`](prompts/bug_to_user_story_v2.yml).
+Foram aplicadas **4 técnicas** de Prompt Engineering (Few-shot obrigatório + 3 adicionais):
+
+| Técnica | Por que escolhi | Como apliquei |
+|---|---|---|
+| **Few-shot Learning** (obrigatória) | É a alavanca mais forte para padronizar o **formato** e o **escopo** da saída, que é exatamente o que as métricas F1/Correctness comparam contra o *ground truth*. Ampliar a cobertura dos exemplos foi o que levou o F1 de 0.81 → 0.88. | Incluí exemplos entrada→saída no `system_prompt` cobrindo os três níveis: **SIMPLES** (carrinho, validação de email, UI mobile, dado incorreto, compatibilidade de navegador), **MÉDIO** (webhook HTTP 500, permissões/OWASP, cálculo de desconto, performance/índice SQL, estoque com critérios de prevenção) e **COMPLEXO** (checkout com XSS + race condition + timeout). Cada um demonstra o formato e o nível de detalhe esperados. |
+| **Role Prompting** | Dar uma persona especialista calibra tom, vocabulário e profundidade — melhora **Clarity** e **Helpfulness**. | Persona definida na 1ª linha: *"Você é um Product Manager sênior e Analista de Negócios especialista em metodologias ágeis…"*. |
+| **Chain of Thought (CoT)** | Bugs complexos exigem raciocínio (quem é o usuário? qual o valor? quais edge cases?). Mas CoT **visível** polui a resposta e derruba **Precision/Clarity** (penalizam verbosidade e divagação). | Apliquei **CoT silencioso**: instruo o modelo a pensar passo a passo (persona → ação → benefício → complexidade → critérios) **internamente** e a responder **apenas** a User Story final, sem expor o raciocínio. |
+| **Skeleton of Thought (SoT)** | A saída precisa de estrutura previsível e testável para maximizar Format/Completeness. | Defini "esqueletos" de saída que **escalam com a complexidade**: bugs simples/médios usam `Como um… / Critérios de Aceitação (Gherkin)`; bugs complexos usam seções `=== USER STORY PRINCIPAL / CRITÉRIOS DE ACEITAÇÃO / CRITÉRIOS TÉCNICOS / CONTEXTO DO BUG / TASKS TÉCNICAS ===`. |
+
+**Outros cuidados de engenharia aplicados ao prompt:**
+
+- **System vs User Prompt:** todas as regras, persona, formato e exemplos ficam no **system prompt**; o **user prompt** contém apenas o relato (`{bug_report}`) — separação limpa de responsabilidades.
+- **Regras explícitas de comportamento:** template de User Story obrigatório, Critérios de Aceitação em **Gherkin** (Dado/Quando/Então/E), preservação de detalhes técnicos e **proibição de alucinação**.
+- **Tratamento de edge cases:** relato vago, relato vazio/sem sentido (resposta de recusa controlada), múltiplos problemas (vira COMPLEXO) e bug sem usuário final óbvio (persona técnica).
+
+## B) Resultados Finais
+
+Avaliação executada com `python src/evaluate.py` (provider **OpenAI**: `gpt-4o-mini` para responder, `gpt-4o` como juiz), sobre o dataset de **15 bugs** (5 simples, 7 médios, 3 complexos).
+
+- **Prompt público no Hub:** https://smith.langchain.com/hub/jonaslc/bug_to_user_story_v2
+- **Projeto/Tracing no LangSmith:** `prompt-optimization-challenge-resolved`
+- **Traces públicos (evidência de execução do prompt — 3 exemplos):**
+  1. https://smith.langchain.com/public/1c14b9e4-3bfb-4322-a1ac-78a3d02db965/r
+  2. https://smith.langchain.com/public/45a621d3-c0d3-43bb-ba8c-19243e5a68cc/r
+  3. https://smith.langchain.com/public/d93535c8-b96f-4bf0-932f-c796cda9c085/r
+- **Screenshots:** salve em `screenshots/` e referencie aqui (avaliação final no terminal + os traces acima).
+
+**Tabela comparativa (v1 ruim → v2 otimizado):**
+
+| Métrica | v1 (baixa qualidade)¹ | v2 (otimizado) | Meta |
+|---|---|---|---|
+| Helpfulness | ~0.45 | **0.93** ✓ | ≥ 0.80 |
+| Correctness | ~0.52 | **0.90** ✓ | ≥ 0.80 |
+| F1-Score | ~0.48 | **0.88** ✓ | ≥ 0.80 |
+| Clarity | ~0.50 | **0.94** ✓ | ≥ 0.80 |
+| Precision | ~0.46 | **0.92** ✓ | ≥ 0.80 |
+| **Média Geral** | ~0.48 | **0.9132** | ≥ 0.80 |
+| **Status** | ❌ REPROVADO | ✅ **APROVADO** | Todas ≥ 0.80 |
+
+¹ Baseline do prompt original (`leonanluppi/bug_to_user_story_v1`): instruções vagas, sem persona, sem exemplos e com `{bug_report}` duplicado no system/user. Valores ilustrativos do enunciado.
+
+### Iterações até a aprovação
+
+| Iteração | Mudança principal | F1 | Média | Status |
+|---|---|---|---|---|
+| 1 | v2 inicial (Role + Few-shot + CoT silencioso + SoT) | 0.76 | — | ❌ só F1 < 0.80 |
+| 2 | Bugs **médios** deixaram de usar o formato de "complexo"; passei a **preservar dados concretos** (fórmulas, códigos HTTP, severidade, OWASP, log de auditoria) e adicionei exemplos few-shot de bug médio (cálculo e segurança) | 0.82 | 0.8468 | ✅ APROVADO (folga pequena) |
+| 3 | **Ampliei a cobertura do Few-shot** para os 5 níveis de bug simples e mais casos médios (performance, estoque com critérios de prevenção), reforçando o padrão de formato/escopo esperado | **0.88** | **0.9132** | ✅ APROVADO (folga confortável) |
+
+> A saída completa da avaliação final está versionada em [`screenshots/evaluation_output.txt`](screenshots/evaluation_output.txt).
+
+## C) Como Executar
+
+### Pré-requisitos
+- **Python 3.9+** (testado com 3.13)
+- Conta no **LangSmith** (API key) e chave da **OpenAI**
+- Seu **username** do LangSmith Hub
+
+### 1. Ambiente e dependências
+```bash
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Credenciais
+Copie `.env.example` para `.env` e preencha (este projeto já vem com `.env` configurado para **OpenAI** — basta colar suas chaves):
+```bash
+cp .env.example .env
+# edite .env e preencha:
+#   LANGSMITH_API_KEY, USERNAME_LANGSMITH_HUB, OPENAI_API_KEY
+# provider já configurado: LLM_PROVIDER=openai / LLM_MODEL=gpt-4o-mini / EVAL_MODEL=gpt-4o
+```
+
+### 3. Pipeline do desafio
+```bash
+# (a) Pull do prompt ruim (v1) do LangSmith Hub
+python src/pull_prompts.py
+
+# (b) [já feito] Prompt otimizado em prompts/bug_to_user_story_v2.yml
+
+# (c) Push do prompt v2 (PÚBLICO) para o seu Hub
+python src/push_prompts.py
+
+# (d) Avaliação automática (cria dataset + roda as 5 métricas)
+python src/evaluate.py
+```
+
+### 4. Testes de validação do prompt
+```bash
+pytest tests/test_prompts.py -v
+```
+
+### Estrutura do que foi implementado
+- `prompts/bug_to_user_story_v2.yml` — prompt otimizado (Role + Few-shot + CoT + SoT)
+- `src/pull_prompts.py` — pull do Hub e serialização em YAML
+- `src/push_prompts.py` — validação, build do `ChatPromptTemplate` e push **público**
+- `tests/test_prompts.py` — 7 testes (os 6 exigidos + validação de estrutura)
